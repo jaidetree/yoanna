@@ -1,17 +1,22 @@
 (ns yoanna
   (:require [clojure.string :as str]
-            [clj-http.client :as client]))
+            [clj-http.client :as client]
+            [clojure.data.codec.base64 :as base64]))
 
 (declare who)
+
+(defn decode
+  [s]
+  (String. (base64/decode (.getBytes s)) "UTF-8"))
 
 (defn get-config!
   "Read dev.secret.edn to get secret api keys
    or any other sensitive config.
    Returns map."
   [filename]
-  (read-string (slurp filename)))
+  (read-string (decode (slurp filename))))
 
-(def config (get-config! "dev.secret.edn"))
+(def config (get-config! "prod.secret.edn"))
 
 (def reasons (:reasons config))
 
@@ -257,26 +262,30 @@
           (is-yes? wants-pizza) (pizza-pyramid state))
     (get-reason state)))
 
-(defn kitty-prompt
+(defn gif-prompt
   [state]
-  (prompt-until state
-                (fn [state] (format
-                              "Need a cat gif? %s (Y/n)"
-                              (emoji :cat)))
-                (fn [state] (format "Sorry, this was a yes or no question."))
-                is-yesno?))
+  (str/lower-case
+    (prompt-until state
+                  (fn [state] (format
+                                "Would you prefer a husky or kitty gif? %s"
+                                (emoji :cat)))
+                  (fn [state] (format "Wait. What?"))
+                  #(let [answer (str/lower-case %)]
+                     (contains? #{"kitty" "husky"} answer)))))
 
 (defn create-giphy-url
   "Build giphy request url.
    Accepts a config map.
    Returns a url string."
-  [{:keys [api_key]}]
-  (format "http://api.giphy.com/v1/gifs/random?tag=kitty&api_key=%s&rating=r"
+  [{:keys [api_key]} tag]
+  (format "http://api.giphy.com/v1/gifs/random?tag=%s&api_key=%s&rating=r"
+    (str/replace tag #"kitty" "cat")
     api_key))
 
-(defn get-cat-gif []
+(defn get-gif
+  [tag]
   "Prints a random kitty giphy url"
-  (let [giphy-url (create-giphy-url config)
+  (let [giphy-url (create-giphy-url config tag)
         response (client/get giphy-url {:as :json})]
     (println
      (get-in response [:body :data :image_original_url]))))
@@ -286,11 +295,18 @@
   (println (format "\"%s\" eh? Sorry you're feeling bad. %s"
                    (:mood state)
                    (emoji :angry-cat)))
-  (let [wants-cats (kitty-prompt state)]
-    (if (is-yes? wants-cats)
-      (get-cat-gif)
-      (println "Oh. Cool... uhhh anyway..."))
+  (let [tag (gif-prompt state)]
+    (get-gif tag)
     (get-reason state)))
+
+(defn wait-prompt
+  [state]
+  (str->int (prompt-until state
+                (fn [state]
+                  (format "How many minutes should I wait?"))
+                (fn [state]
+                  (format "Try entering a positive number."))
+                #(and (is-number? %) (> (str->int %) -1)))))
 
 (defn any-prompt
   [state]
@@ -309,8 +325,19 @@
   (println (format "Go get a %s or take a %s and come back."
             (emoji :coffee)
             (emoji :sleep)))
-  (any-prompt state)
-  (get-reason state))
+  (let [minutes (wait-prompt state)]
+    (if (> minutes 0)
+      (do
+        (println (format "Ok! Waiting %d minutes..." minutes))
+        (Thread/sleep
+          (->> minutes
+               (* 60)
+               (* 1000)))
+        (println "I hope you enjoyed your break. Ready to continue?")
+        (any-prompt state))
+      (do
+        (println "Cool, let's get to it.")))
+    (get-reason state)))
 
 (assoc {}
        :mood "ok"
@@ -346,11 +373,12 @@
 
 (defn greet-jay
   [state]
-  (format "You suck! Go away %s!! %s" (:name state) (emoji :angry-cat)))
+  (println (format "You suck! Go away %s!! %s" (:name state) (emoji :angry-cat))))
 
 (defn greet-person
   [state]
-  (format "Whatever! %s" (:name state)))
+  (println (format "Whatever %s!" (:name state)))
+  (exit))
 
 (defn prompt-name
   [state]
